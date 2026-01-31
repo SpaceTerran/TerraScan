@@ -30,6 +30,12 @@ class Config:
     bot_emoji: str = "🤖"
     severity_icons: dict = field(default_factory=dict)
 
+    # Impact analysis settings
+    impact_analysis_enabled: bool = True
+    impact_token_budget: int = 6000
+    impact_max_files: int = 10
+    impact_include_references: bool = True
+
 
 def load_config() -> Config:
     """Load config from YAML files."""

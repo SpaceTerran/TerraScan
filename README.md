@@ -10,7 +10,8 @@ Self-hosted AI code review bot for Gitea. Automatically reviews pull requests an
 ## Features
 
 - Automatic PR reviews triggered by Gitea Actions
-- Inline comments on specific lines plus summary comments
+- Inline comments on specific lines plus summary comments (with optional code snippets)
+- **Impact analysis (optional):** Secondary AI pass analyzes how each change affects the codebase and feeds context into the main review
 - Supports OpenAI and Anthropic (Claude)
 - Configurable severity thresholds for blocking PRs
 - Stateless Docker container — all config via environment variables
@@ -112,6 +113,10 @@ Edit `config/review-config.yml` to customize behavior:
 | `max_comments` | `50` | Maximum inline comments per PR |
 | `max_tokens` | `16000` | Maximum AI response length |
 | `temperature` | `0.2` | AI creativity (0.0 = deterministic) |
+| `impact_analysis_enabled` | `true` | Run a secondary AI pass to analyze impact of each change; feeds context into the main review |
+| `impact_token_budget` | `6000` | Token budget for impact-related context (higher = more context, more cost) |
+| `impact_max_files` | `10` | Max number of changed files to analyze for impact in large PRs |
+| `impact_include_references` | `true` | Include grep-based reference search (files that import/reference changed files) |
 
 ## Architecture
 
@@ -224,6 +229,24 @@ When forking this repository to your Gitea instance:
    - `GTOKEN` — Personal access token with `package:write` and `repo:write` scope
 
 5. **Optional:** Delete the `.github/` folder (GitHub Actions won't run on Gitea anyway)
+
+## What's new: Impact analysis
+
+TerraScan now supports an **optional impact analysis** step that runs *before* the main diff review:
+
+1. **Secondary AI call:** For each changed file (up to `impact_max_files`), the bot runs a lightweight AI query to analyze:
+   - What changed and what functionality is affected
+   - Potential impacts on other parts of the project
+   - What the reviewer should specifically verify
+   - Related files that reference or are referenced by the change
+
+2. **Structural context:** When `impact_include_references` is enabled, the bot uses grep to find files that import or reference the changed files (e.g. Python imports, Ansible includes). That list is passed into the impact analysis.
+
+3. **Impact-aware review:** The main review prompt receives structured context: project overview, per-file impact summaries, and snippets from related files (within `impact_token_budget`). The reviewer can focus on cross-file effects and verify that dependent code is consistent.
+
+4. **PR summary:** The comment posted on the PR includes an **Impact Analysis** subsection with the identified impacts and "files requiring attention," in addition to the usual findings and recommendations.
+
+You can turn this off by setting `impact_analysis_enabled: false` in `config/review-config.yml` to use the original, faster review mode (single AI pass on the diff only).
 
 ## Contributing
 

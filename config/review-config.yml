@@ -133,3 +133,37 @@ severity_icons:
   error: "🟠"
   warning: "🟡"
   info: "🔵"
+
+
+# =============================================================================
+# IMPACT ANALYSIS
+# =============================================================================
+# Analyze how changes affect the rest of the codebase.
+#
+# When enabled, the bot will:
+#   1. Find files that reference the changed files
+#   2. Use AI to analyze potential impacts of each change
+#   3. Include impact context in the review prompt
+#
+# This helps the AI reviewer understand:
+#   - What parts of the project are affected
+#   - How changes ripple through the codebase
+#   - What the reviewer should specifically verify
+
+# Enable or disable impact analysis
+# Set to false to use the original review mode (faster, cheaper)
+impact_analysis_enabled: true
+
+# Token budget for impact context
+# Higher values include more context but increase API costs
+# Recommended: 4000-8000 for most projects
+impact_token_budget: 6000
+
+# Maximum files to analyze for impact
+# Large PRs with many files will only analyze the first N
+impact_max_files: 10
+
+# Include structural reference analysis (grep-based)
+# Finds files that import/reference the changed files
+# Set to false if you only want AI semantic analysis
+impact_include_references: true

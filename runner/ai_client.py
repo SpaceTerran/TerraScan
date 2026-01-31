@@ -14,6 +14,14 @@ class AIClient(ABC):
         """Send review request and return parsed response."""
         pass
 
+    def quick_query(self, prompt: str) -> str:
+        """
+        Lightweight query for impact analysis.
+        Returns raw text response (no JSON parsing).
+        Can be overridden by subclasses to use cheaper/faster models.
+        """
+        raise NotImplementedError("Subclass must implement quick_query")
+
 
 class OpenAIClient(AIClient):
     """OpenAI API client using Responses API for Codex models."""
@@ -35,9 +43,10 @@ class OpenAIClient(AIClient):
                             "file": {"type": "string"},
                             "line": {"type": "integer"},
                             "severity": {"type": "string", "enum": ["info", "warning", "error", "critical"]},
-                            "message": {"type": "string"}
+                            "message": {"type": "string"},
+                            "code_snippet": {"type": "string"}
                         },
-                        "required": ["file", "line", "severity", "message"],
+                        "required": ["file", "line", "severity", "message", "code_snippet"],
                         "additionalProperties": False
                     }
                 },
@@ -79,6 +88,19 @@ class OpenAIClient(AIClient):
             print(f"Error calling OpenAI API: {e}")
             raise
 
+    def quick_query(self, prompt: str) -> str:
+        """Lightweight query for impact analysis."""
+        try:
+            response = self.client.responses.create(
+                model=self.config.model,
+                instructions="You are a code analyst. Respond with valid JSON only, no markdown.",
+                input=prompt,
+            )
+            return response.output_text
+        except Exception as e:
+            print(f"Error in quick_query: {e}")
+            return "{}"
+
 
 class AnthropicClient(AIClient):
     """Anthropic Claude API client."""
@@ -109,6 +131,20 @@ class AnthropicClient(AIClient):
         except Exception as e:
             print(f"Error calling Anthropic API: {e}")
             raise
+
+    def quick_query(self, prompt: str) -> str:
+        """Lightweight query for impact analysis."""
+        try:
+            response = self.client.messages.create(
+                model=self.config.model,
+                max_tokens=1024,  # Shorter response for quick queries
+                system="You are a code analyst. Respond with valid JSON only, no markdown.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text
+        except Exception as e:
+            print(f"Error in quick_query: {e}")
+            return "{}"
 
 
 class OllamaClient(AIClient):
@@ -141,6 +177,27 @@ class OllamaClient(AIClient):
         except Exception as e:
             print(f"Error calling Ollama API: {e}")
             raise
+
+    def quick_query(self, prompt: str) -> str:
+        """Lightweight query for impact analysis."""
+        import requests
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.config.model,
+                    "prompt": f"You are a code analyst. Respond with valid JSON only, no markdown.\n\n{prompt}",
+                    "stream": False,
+                    "format": "json",
+                },
+                timeout=60,
+            )
+            response.raise_for_status()
+            return response.json().get("response", "{}")
+        except Exception as e:
+            print(f"Error in quick_query: {e}")
+            return "{}"
 
 
 def create_client(config: Config, api_key: str = None) -> AIClient:

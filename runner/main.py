@@ -11,6 +11,7 @@ from ai_client import create_client
 from gitea_client import GiteaClient
 from diff_parser import parse_diff
 from chunker import chunk_diff_files
+from impact_analyzer import analyze_impacts, format_impact_message
 
 
 def should_ignore(filepath: str, patterns: list) -> bool:
@@ -23,8 +24,13 @@ def should_ignore(filepath: str, patterns: list) -> bool:
     return False
 
 
-def load_prompt() -> str:
+def load_prompt(impact_enabled: bool = False) -> str:
     """Load the system prompt."""
+    if impact_enabled:
+        prompt_file = Path("/app/config/prompts/impact-aware-prompt.txt")
+        if prompt_file.exists():
+            return prompt_file.read_text()
+    # Fallback to standard prompt
     prompt_file = Path("/app/config/prompts/system-prompt.txt")
     if prompt_file.exists():
         return prompt_file.read_text()
@@ -67,7 +73,19 @@ def main() -> int:
 
     # Review with AI
     ai = create_client(config, api_key)
-    prompt = load_prompt()
+
+    # Run impact analysis if enabled
+    repo_root = os.environ.get("REPO_ROOT", "/workspace")
+    if config.impact_analysis_enabled:
+        print("Running impact analysis...")
+        impact_context = analyze_impacts(diff_files, repo_root, ai, config)
+        print(f"Impact analysis complete: {len(impact_context.impacts)} files analyzed, "
+              f"{len(impact_context.critical_files)} critical files identified")
+        prompt = load_prompt(impact_enabled=True)
+    else:
+        impact_context = None
+        prompt = load_prompt(impact_enabled=False)
+
     chunks = chunk_diff_files(diff_files, max_tokens=config.max_tokens * 5)
 
     all_comments = []
@@ -76,7 +94,14 @@ def main() -> int:
     for i, chunk in enumerate(chunks):
         print(f"Processing chunk {i+1}/{len(chunks)}")
         diff_text = "\n\n".join(f"### {f.path}\n```diff\n{f.content}\n```" for f in chunk)
-        result = ai.review(prompt, f"Review these changes:\n\n{diff_text}")
+
+        # Format message with or without impact context
+        if impact_context and config.impact_analysis_enabled:
+            user_message = format_impact_message(diff_text, impact_context)
+        else:
+            user_message = f"Review these changes:\n\n{diff_text}"
+
+        result = ai.review(prompt, user_message)
         all_comments.extend(result.get("inline_comments", []))
         if result.get("summary"):
             all_summaries.append(result["summary"])
@@ -90,7 +115,7 @@ def main() -> int:
     # Post to Gitea
     if gitea_token and repo_name and pr_number:
         gitea = GiteaClient(config, gitea_token)
-        gitea.post_review(repo_name, int(pr_number), all_comments, all_summaries)
+        gitea.post_review(repo_name, int(pr_number), all_comments, all_summaries, impact_context)
     else:
         import json
         print(json.dumps({"comments": all_comments, "summaries": all_summaries}, indent=2))
