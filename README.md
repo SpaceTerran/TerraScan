@@ -1,7 +1,7 @@
 # TerraScan
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build Status](https://github.com/SpaceTerran/TerraScan/actions/workflows/build-image.yml/badge.svg)](https://github.com/SpaceTerran/TerraScan/actions)
+[![Build Status](https://github.com/SpaceTerran/TerraScan/actions/workflows/build-image.yml/badge.svg?branch=main)](https://github.com/SpaceTerran/TerraScan/actions/workflows/build-image.yml)
 
 Self-hosted AI code review bot for Gitea. Automatically reviews pull requests and posts inline comments.
 
@@ -225,9 +225,19 @@ When forking this repository to your Gitea instance:
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
+Contributions are welcome! Here's how to get involved:
+
+1. **Report bugs or request features** — Open an [issue](https://github.com/SpaceTerran/TerraScan/issues)
+2. **Submit code changes:**
+   - Fork the repository
+   - Create a feature branch (`git checkout -b feature/my-improvement`)
+   - Make your changes and commit
+   - Push to your fork and open a pull request
+
+Pull requests are reviewed and merged by the maintainers. Please ensure your changes:
+- Don't break existing Gitea Actions compatibility
+- Include clear commit messages
+- Update documentation if adding new features
 
 ## Troubleshooting
 
