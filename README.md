@@ -5,6 +5,8 @@
 
 Self-hosted AI code review bot for Gitea. Automatically reviews pull requests and posts inline comments.
 
+**Full walkthrough:** [TerraScan: Self-Hosted AI Code Reviews for Gitea](https://spaceterran.com/posts/terrascan-self-hosted-ai-code-review-gitea/)
+
 ## Features
 
 - Automatic PR reviews triggered by Gitea Actions
