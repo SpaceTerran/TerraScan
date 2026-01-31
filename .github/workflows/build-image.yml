@@ -27,7 +27,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/terrascan
+  # Note: IMAGE_NAME is set in the job to ensure lowercase (Docker requirement)
+  # Using github.repository_owner directly would give "SpaceTerran" but Docker needs lowercase
 
 jobs:
   build:
@@ -41,6 +42,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set image name (lowercase)
+        id: image
+        run: |
+          # Docker requires lowercase image names
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=${OWNER_LC}/terrascan" >> $GITHUB_OUTPUT
 
       - name: Determine tag
         id: tag
@@ -81,13 +89,13 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} -f docker/Dockerfile .
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker build -t ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ steps.tag.outputs.tag }} -f docker/Dockerfile .
+          docker tag ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ steps.tag.outputs.tag }} ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest
 
       - name: Push Docker image
         run: |
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest
 
       - name: Create Release
         if: steps.tag.outputs.version != '' && steps.tag.outputs.version != 'latest'
@@ -119,7 +127,7 @@ jobs:
           fi
           
           # Add Docker image info
-          DOCKER_INFO=$(printf "\n\n## Docker Image\n\n\`\`\`bash\ndocker pull %s/%s:%s\n\`\`\`\n\nOr use the \`latest\` tag:\n\`\`\`bash\ndocker pull %s/%s:latest\n\`\`\`" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}" "$VERSION_TAG" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}")
+          DOCKER_INFO=$(printf "\n\n## Docker Image\n\n\`\`\`bash\ndocker pull %s/%s:%s\n\`\`\`\n\nOr use the \`latest\` tag:\n\`\`\`bash\ndocker pull %s/%s:latest\n\`\`\`" "${{ env.REGISTRY }}" "${{ steps.image.outputs.name }}" "$VERSION_TAG" "${{ env.REGISTRY }}" "${{ steps.image.outputs.name }}")
           RELEASE_NOTES="${RELEASE_NOTES}${DOCKER_INFO}"
           
           # Create or update release
@@ -134,15 +142,16 @@ jobs:
       - name: Summary
         run: |
           VERSION_TAG="${{ steps.tag.outputs.tag }}"
+          IMAGE_NAME="${{ steps.image.outputs.name }}"
           
           echo "## Docker Image Built Successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`$VERSION_TAG\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${IMAGE_NAME}:$VERSION_TAG\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Pull with:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${IMAGE_NAME}:$VERSION_TAG" >> $GITHUB_STEP_SUMMARY
           echo "# or" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${IMAGE_NAME}:latest" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
