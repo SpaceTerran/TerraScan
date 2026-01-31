@@ -1,0 +1,148 @@
+# =============================================================================
+# GitHub Actions Workflow - Build and Push to GitHub Container Registry (GHCR)
+# =============================================================================
+# This workflow is for GitHub hosting only. It builds and pushes the TerraScan
+# container to ghcr.io for public consumption.
+#
+# NOTE FOR GITEA USERS:
+#   This workflow will NOT run on Gitea. If you forked this to your Gitea
+#   instance, use .gitea/workflows/build-image.yml instead and update the
+#   placeholder values (REGISTRY, IMAGE_NAME) for your environment.
+# =============================================================================
+
+name: Build and Push Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the Docker image'
+        required: false
+        default: 'latest'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/terrascan
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Use the tag that was pushed
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            # Use manual input tag
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # Auto-generate version based on commit count
+            BASE_TAG=$(git tag -l "v0.1.0" 2>/dev/null | head -1)
+            if [ -n "$BASE_TAG" ]; then
+              COMMIT_COUNT=$(git rev-list --count "$BASE_TAG"..HEAD 2>/dev/null || echo "0")
+              PATCH_VERSION=$((1 + COMMIT_COUNT))
+            else
+              COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+              PATCH_VERSION=$((COMMIT_COUNT + 1))
+            fi
+            
+            SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            NEW_VERSION="v0.1.${PATCH_VERSION}"
+            
+            echo "tag=$NEW_VERSION" >> $GITHUB_OUTPUT
+            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+            echo "Generated version: $NEW_VERSION (commit: $SHORT_SHA, count: $COMMIT_COUNT)"
+          fi
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} -f docker/Dockerfile .
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Create Release
+        if: steps.tag.outputs.version != '' && steps.tag.outputs.version != 'latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION_TAG="${{ steps.tag.outputs.version }}"
+          
+          echo "Creating release $VERSION_TAG..."
+          
+          # Get the previous tag to generate release notes
+          PREVIOUS_TAG=$(git tag -l "v*" | sort -V | grep -v "^$VERSION_TAG$" | tail -1)
+          
+          # Generate release notes from git commits
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG"..HEAD 2>/dev/null | head -50)
+            if [ -z "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES="No changes since $PREVIOUS_TAG"
+            else
+              RELEASE_NOTES=$(printf "## Changes since %s\n\n%s" "$PREVIOUS_TAG" "$RELEASE_NOTES")
+            fi
+          else
+            RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" -20 2>/dev/null | head -50)
+            if [ -z "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES="Initial release"
+            else
+              RELEASE_NOTES=$(printf "## Changes\n\n%s" "$RELEASE_NOTES")
+            fi
+          fi
+          
+          # Add Docker image info
+          DOCKER_INFO=$(printf "\n\n## Docker Image\n\n\`\`\`bash\ndocker pull %s/%s:%s\n\`\`\`\n\nOr use the \`latest\` tag:\n\`\`\`bash\ndocker pull %s/%s:latest\n\`\`\`" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}" "$VERSION_TAG" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}")
+          RELEASE_NOTES="${RELEASE_NOTES}${DOCKER_INFO}"
+          
+          # Create or update release
+          if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
+            echo "Release exists, updating..."
+            echo "$RELEASE_NOTES" | gh release edit "$VERSION_TAG" --notes-file -
+          else
+            echo "Creating new release..."
+            echo "$RELEASE_NOTES" | gh release create "$VERSION_TAG" --title "$VERSION_TAG" --notes-file -
+          fi
+
+      - name: Summary
+        run: |
+          VERSION_TAG="${{ steps.tag.outputs.tag }}"
+          
+          echo "## Docker Image Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`$VERSION_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull with:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "# or" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

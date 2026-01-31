@@ -1,0 +1,135 @@
+# =============================================================================
+# AI Code Review Configuration
+# =============================================================================
+# This file controls how the AI reviews your code.
+#
+# To customize without editing this file, mount your own config:
+#   docker run -v /path/to/my-config.yml:/app/config/custom.yml ...
+
+
+# =============================================================================
+# AI PROVIDER
+# =============================================================================
+# Which AI service powers the reviews.
+#
+# Supported providers:
+#   openai    - Requires OPENAI_API_KEY env var
+#   anthropic - Requires ANTHROPIC_API_KEY env var
+#   ollama    - Local models, no API key needed
+#
+provider: openai
+
+# Model name (depends on provider)
+# Examples:
+#   OpenAI:    gpt-5.2-codex, gpt-4o, gpt-4-turbo
+#   Anthropic: claude-sonnet-4-20250514, claude-3-opus-20240229
+#   Ollama:    codellama, llama3, mistral
+model: gpt-5.2-codex
+
+# For Ollama: URL of your Ollama server (uncomment if using Ollama)
+# ollama_url: http://localhost:11434
+
+# AI parameters
+max_tokens: 16000      # Max response length (higher = more detailed, more cost)
+temperature: 0.2       # 0.0 = deterministic, 2.0 = creative
+
+
+# =============================================================================
+# GITEA SERVER
+# =============================================================================
+# URL of your Gitea instance. The bot posts review comments here.
+#
+# This is the only Gitea setting you need to configure.
+# REPO_NAME and PR_NUMBER are automatically provided by Gitea Actions.
+#
+# CHANGE THIS: Set to your Gitea instance URL
+gitea_url: https://your-gitea-instance.com
+
+
+# =============================================================================
+# REVIEW BEHAVIOR
+# =============================================================================
+
+# When should the CI job fail?
+#
+# The AI assigns a severity to each issue it finds:
+#   info     - Suggestions, nice-to-haves
+#   warning  - Potential issues, anti-patterns
+#   error    - Bugs, incorrect logic
+#   critical - Security vulnerabilities, must fix
+#
+# Set this to the minimum severity that should block a PR:
+#   critical - Only block on security issues (recommended)
+#   error    - Block on any bugs
+#   warning  - Strict mode
+#   none     - Never block (advisory only)
+#
+fail_on_severity: critical
+
+# Maximum inline comments per PR (prevents spam on large PRs)
+max_comments: 50
+
+
+# =============================================================================
+# FILES TO SKIP
+# =============================================================================
+# These files are never reviewed. Saves time and API costs.
+#
+# Uses glob patterns:
+#   *        - matches any characters in a filename
+#   /        - at end means "this directory and contents"
+#
+ignore_patterns:
+  # Generated files
+  - "*.lock"
+  - "package-lock.json"
+  - "yarn.lock"
+  - "poetry.lock"
+  - "*.min.js"
+  - "*.min.css"
+
+  # Dependencies
+  - "node_modules/"
+  - "vendor/"
+
+  # Binary files
+  - "*.pyc"
+  - "*.exe"
+  - "*.so"
+  - "*.png"
+  - "*.jpg"
+  - "*.gif"
+  - "*.woff"
+  - "*.woff2"
+
+  # Build output
+  - "dist/"
+  - "build/"
+
+  # Contains secrets
+  - "*.tfstate"
+  - "*.tfstate.backup"
+  - ".terraform/"
+
+  # OS files
+  - ".DS_Store"
+  - "Thumbs.db"
+
+
+# =============================================================================
+# BOT DISPLAY
+# =============================================================================
+# How the bot appears in PR comments.
+#
+# The bot uses this text to find and clean up its old comments.
+# If you change this, old comments from previous runs won't be deleted.
+#
+bot_name: "AI Code Review"
+bot_emoji: "🤖"
+
+# Emoji for each severity level
+severity_icons:
+  critical: "🔴"
+  error: "🟠"
+  warning: "🟡"
+  info: "🔵"

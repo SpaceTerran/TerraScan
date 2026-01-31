@@ -1,0 +1,5 @@
+# AI Code Review Dependencies
+openai>=2.15.0
+anthropic>=0.77.0
+pyyaml>=6.0.3
+requests>=2.32.5

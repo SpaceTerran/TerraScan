@@ -1,0 +1,27 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.cursor
+.claude
+.vscode
+*.swp
+*~
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+
+# Documentation
+*.md
+!README.md
+
+# Examples (not needed in container)
+examples/
+
+# CI/CD (not needed in container)
+.gitea/
+.github/

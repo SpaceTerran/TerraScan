@@ -1,0 +1,68 @@
+# =============================================================================
+# AI Code Review Job (Gitea Actions)
+# =============================================================================
+# Add this job to your .gitea/workflows/CICD.yml file.
+# Runs on pull requests to provide automated code review feedback.
+#
+# CONFIGURATION REQUIRED:
+#   1. Replace 'your-gitea-instance.com' with your Gitea domain
+#   2. Replace 'your-org/terrascan' with your org/package path
+#   3. Set secrets at org level:
+#      - OPENAI_API_CODEREVIEW_KEY: OpenAI API key
+#      - GTOKEN: Gitea personal access token with repo write access
+#
+# NOTE: If you add this job as a dependency for other jobs (e.g., CheckMode),
+# use this condition to allow those jobs to run even when AIReview is skipped:
+#   if: |
+#     !cancelled() && !failure() &&
+#     (gitea.event_name == 'pull_request' || gitea.event_name == 'workflow_dispatch')
+# =============================================================================
+
+  AIReview:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    if: gitea.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: https://gitea.com/actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run AI Code Review
+        run: |
+          BASE_REF="${{ gitea.event.pull_request.base.ref }}"
+          # Fetch full history for base branch to ensure merge-base exists
+          git fetch origin "$BASE_REF"
+
+          # Try three-dot diff first (shows changes since common ancestor)
+          # Fall back to two-dot diff if no merge base exists (e.g., after main advances)
+          if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"...HEAD 2>/dev/null); then
+            echo "::warning::No merge base found, using two-dot diff"
+            if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"..HEAD 2>/dev/null); then
+              echo "::warning::Could not compute diff, skipping AI review"
+              exit 0
+            fi
+          fi
+
+          if [ -z "$DIFF_CONTENT" ]; then
+            echo "No changes to review"
+            exit 0
+          fi
+
+          echo "Diff size: $(echo "$DIFF_CONTENT" | wc -c) bytes"
+
+          # -----------------------------------------------------------------------
+          # CHANGE THESE VALUES for your Gitea instance
+          # -----------------------------------------------------------------------
+          # Login and pull the review image
+          echo "${{ secrets.GTOKEN }}" | docker login your-gitea-instance.com -u ${{ gitea.actor }} --password-stdin
+          docker pull your-gitea-instance.com/your-org/terrascan:latest
+
+          # Run TerraScan (gitea_url comes from image config; override via custom config if needed)
+          echo "$DIFF_CONTENT" | docker run --rm -i \
+            -e OPENAI_API_KEY=${{ secrets.OPENAI_API_CODEREVIEW_KEY }} \
+            -e GITEA_TOKEN=${{ secrets.GTOKEN }} \
+            -e REPO_NAME=${{ gitea.repository }} \
+            -e PR_NUMBER=${{ gitea.event.pull_request.number }} \
+            -e DIFF_PATH=/dev/stdin \
+            your-gitea-instance.com/your-org/terrascan:latest

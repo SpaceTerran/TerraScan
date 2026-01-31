@@ -1,0 +1,343 @@
+# =============================================================================
+# Gitea Actions Workflow - Build and Push Docker Image
+# =============================================================================
+# This workflow builds and pushes the TerraScan container to your Gitea registry.
+#
+# CONFIGURATION REQUIRED:
+#   1. Update REGISTRY below to your Gitea instance domain
+#   2. Update IMAGE_NAME to your-org/terrascan
+#   3. Add GTOKEN secret with package:write and repo:write permissions
+# =============================================================================
+
+name: Build and Push Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the Docker image'
+        required: false
+        default: 'latest'
+
+env:
+  # -------------------------------------------------------------------------
+  # CHANGE THESE VALUES for your Gitea instance
+  # -------------------------------------------------------------------------
+  REGISTRY: your-gitea-instance.com        # Your Gitea domain (e.g., git.example.com)
+  IMAGE_NAME: your-org/terrascan           # Your org/package name (e.g., myorg/terrascan)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: https://gitea.com/actions/checkout@v6
+        with:
+          fetch-depth: 0  # Fetch full history for version calculation
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ gitea.event_name }}" = "push" ] && [[ "${{ gitea.ref }}" == refs/tags/* ]]; then
+            # Use the tag that was pushed
+            echo "tag=${{ gitea.ref_name }}" >> $GITEA_OUTPUT
+            echo "version=${{ gitea.ref_name }}" >> $GITEA_OUTPUT
+          elif [ -n "${{ gitea.event.inputs.tag }}" ]; then
+            # Use manual input tag
+            echo "tag=${{ gitea.event.inputs.tag }}" >> $GITEA_OUTPUT
+            echo "version=${{ gitea.event.inputs.tag }}" >> $GITEA_OUTPUT
+          else
+            # Auto-generate version based on commit count and date
+            # This ensures each build gets a unique, incrementing version
+            
+            # Get commit count since the beginning (or since a base tag if it exists)
+            BASE_TAG=$(git tag -l "v0.1.0" 2>/dev/null | head -1)
+            if [ -n "$BASE_TAG" ]; then
+              # Count commits since base tag
+              COMMIT_COUNT=$(git rev-list --count "$BASE_TAG"..HEAD 2>/dev/null || echo "0")
+              # Add 1 to the base version (0.1.0) + commit count
+              PATCH_VERSION=$((1 + COMMIT_COUNT))
+            else
+              # No base tag, use total commit count
+              COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+              PATCH_VERSION=$((COMMIT_COUNT + 1))
+            fi
+            
+            # Get short commit SHA for uniqueness
+            SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            
+            # Generate version: v0.1.{patch}-{short_sha}
+            # Using v0.1 as base, incrementing patch with each commit
+            NEW_VERSION="v0.1.${PATCH_VERSION}"
+            
+            echo "tag=$NEW_VERSION" >> $GITEA_OUTPUT
+            echo "version=$NEW_VERSION" >> $GITEA_OUTPUT
+            echo "Generated version: $NEW_VERSION (commit: $SHORT_SHA, count: $COMMIT_COUNT)"
+          fi
+
+      - name: Login to Gitea Registry
+        run: |
+          echo "${{ secrets.GTOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ gitea.actor }} --password-stdin
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} -f docker/Dockerfile .
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Link package to repository
+        continue-on-error: true
+        run: |
+          # Extract owner and package name from IMAGE_NAME
+          IMAGE_OWNER=$(echo "${{ env.IMAGE_NAME }}" | cut -d'/' -f1)
+          PACKAGE_NAME=$(echo "${{ env.IMAGE_NAME }}" | cut -d'/' -f2)
+          REPO_OWNER=$(echo "${{ gitea.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ gitea.repository }}" | cut -d'/' -f2)
+          
+          echo "Attempting to link package $IMAGE_OWNER/$PACKAGE_NAME to repository $REPO_OWNER/$REPO_NAME"
+          
+          # Use repository owner instead of image owner for API calls
+          # Gitea is case-sensitive and packages are owned by the actual organization/user
+          API_OWNER="$REPO_OWNER"
+          
+          # List packages for the owner to find our package
+          echo "Fetching packages for owner: $API_OWNER"
+          PACKAGES_RESPONSE=$(curl -s -X GET \
+            -H "Authorization: token ${{ secrets.GTOKEN }}" \
+            -H "Accept: application/json" \
+            "https://${{ env.REGISTRY }}/api/v1/packages/$API_OWNER?type=container")
+          
+          # Try to extract package ID and check repository link - prefer jq if available, otherwise use Python
+          EXPECTED_REPO="$REPO_OWNER/$REPO_NAME"
+          CURRENT_REPO=""
+          
+          if command -v jq >/dev/null 2>&1; then
+            PACKAGE_ID=$(echo "$PACKAGES_RESPONSE" | jq -r ".[] | select(.name == \"$PACKAGE_NAME\") | .id" | head -1)
+            CURRENT_REPO=$(echo "$PACKAGES_RESPONSE" | jq -r ".[] | select(.name == \"$PACKAGE_NAME\") | .repository.full_name // empty" | head -1)
+          else
+            # Fallback to Python using environment variables to avoid heredoc issues
+            export PACKAGES_JSON="$PACKAGES_RESPONSE"
+            export PACKAGE_NAME="$PACKAGE_NAME"
+            PACKAGE_ID=$(python3 -c "import json, os, sys; packages = json.loads(os.environ['PACKAGES_JSON']); [print(pkg.get('id')) or sys.exit(0) for pkg in packages if pkg.get('name') == os.environ['PACKAGE_NAME']]")
+            CURRENT_REPO=$(python3 -c "import json, os; packages = json.loads(os.environ['PACKAGES_JSON']); pkg = next((p for p in packages if p.get('name') == os.environ['PACKAGE_NAME']), None); repo = pkg.get('repository', {}) if pkg else {}; print(repo.get('full_name', '') if repo else '')" 2>/dev/null || echo "")
+          fi
+          
+          if [ -n "$PACKAGE_ID" ] && [ "$PACKAGE_ID" != "null" ] && [ "$PACKAGE_ID" != "" ]; then
+            echo "Found package ID: $PACKAGE_ID"
+            if [ -n "$CURRENT_REPO" ]; then
+              echo "Current repository link: $CURRENT_REPO"
+            else
+              echo "Package is not currently linked to any repository"
+            fi
+            
+            EXPECTED_REPO="$REPO_OWNER/$REPO_NAME"
+            
+            if [ "$CURRENT_REPO" = "$EXPECTED_REPO" ]; then
+              echo "✓ Package is already linked to repository $EXPECTED_REPO"
+              LINKED=true
+            else
+              # Link package to repository using Gitea API
+              # Endpoint format: POST /api/v1/packages/{owner}/{type}/{name}/-/link/{repo_name}
+              # Added in Gitea 1.24.0 via PR #33481
+              echo "Linking package to repository..."
+              echo "Using endpoint: POST /api/v1/packages/$API_OWNER/container/$PACKAGE_NAME/-/link/$REPO_NAME"
+              
+              LINKED=false
+              LINK_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
+                -H "Authorization: token ${{ secrets.GTOKEN }}" \
+                -H "Accept: application/json" \
+                "https://${{ env.REGISTRY }}/api/v1/packages/$API_OWNER/container/$PACKAGE_NAME/-/link/$REPO_NAME")
+              
+              HTTP_STATUS=$(echo "$LINK_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
+              LINK_BODY=$(echo "$LINK_RESPONSE" | grep -v "HTTP_STATUS:")
+              
+              if [ "$HTTP_STATUS" = "201" ]; then
+                echo "✓ Package successfully linked to repository"
+                LINKED=true
+              elif [ "$HTTP_STATUS" = "400" ]; then
+                # 400 with "invalid argument" usually means already linked
+                # Check if it's linked to the correct repo
+                if [ -n "$CURRENT_REPO" ] && [ "$CURRENT_REPO" = "$EXPECTED_REPO" ]; then
+                  echo "✓ Package is already linked to the correct repository (400 indicates existing link)"
+                  LINKED=true
+                else
+                  echo "⚠ Package linking returned 400 - may already be linked to a different repository"
+                  echo "Current repository: ${CURRENT_REPO:-'none'}"
+                  echo "Expected repository: $EXPECTED_REPO"
+                fi
+              else
+                echo "Link response status: $HTTP_STATUS"
+                if [ -n "$LINK_BODY" ]; then
+                  echo "Response body: $LINK_BODY"
+                fi
+              fi
+            fi
+            
+            if [ "$LINKED" = "false" ]; then
+              echo ""
+              echo "⚠ Package linking via API failed or is not available."
+              echo "This feature requires Gitea 1.24.0+ (added in PR #33481)."
+              echo "The package has been pushed successfully, but needs to be linked manually:"
+              echo ""
+              echo "**Manual Linking Steps:**"
+              echo "1. Visit: https://${{ env.REGISTRY }}/$API_OWNER/-/packages/container/$PACKAGE_NAME"
+              echo "2. Click the 'Settings' (gear) icon"
+              echo "3. In the 'Repository' dropdown, select: $REPO_OWNER/$REPO_NAME"
+              echo "4. Click 'Save'"
+              echo ""
+              echo "After linking, the package will appear in this repository's Packages section."
+            fi
+          else
+            echo "Could not find package ID for '$PACKAGE_NAME'"
+            echo "Package list response:"
+            echo "$PACKAGES_RESPONSE" | head -c 1000
+            echo ""
+            echo ""
+            echo "The package should appear in:"
+            echo "  https://${{ env.REGISTRY }}/$API_OWNER/-/packages"
+            echo "You can link it to the repository manually in the package settings."
+          fi
+
+      - name: Create Release
+        if: steps.tag.outputs.version != '' && steps.tag.outputs.version != 'latest'
+        continue-on-error: true
+        run: |
+          VERSION_TAG="${{ steps.tag.outputs.version }}"
+          REPO_OWNER=$(echo "${{ gitea.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ gitea.repository }}" | cut -d'/' -f2)
+          
+          echo "Creating release $VERSION_TAG..."
+          
+          # Get the previous tag to generate release notes
+          PREVIOUS_TAG=$(git tag -l "v*" | sort -V | grep -v "^$VERSION_TAG$" | tail -1)
+          
+          # Generate release notes from git commits
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "Generating release notes since $PREVIOUS_TAG..."
+            RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG"..HEAD 2>/dev/null | head -50)
+            if [ -z "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES="No changes since $PREVIOUS_TAG"
+            else
+              RELEASE_NOTES=$(printf "## Changes since %s\n\n%s" "$PREVIOUS_TAG" "$RELEASE_NOTES")
+            fi
+          else
+            echo "No previous tag found, generating release notes from all commits..."
+            RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" -20 2>/dev/null | head -50)
+            if [ -z "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES="Initial release"
+            else
+              RELEASE_NOTES=$(printf "## Changes\n\n%s" "$RELEASE_NOTES")
+            fi
+          fi
+          
+          # Add Docker image info to release notes
+          DOCKER_IMAGE_SECTION=$(printf "## Docker Image\n\n\`\`\`bash\ndocker pull %s/%s:%s\n\`\`\`\n\nOr use the \`latest\` tag for the most recent build:\n\`\`\`bash\ndocker pull %s/%s:latest\n\`\`\`" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}" "$VERSION_TAG" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}")
+          RELEASE_NOTES=$(printf "%s\n\n%s" "$RELEASE_NOTES" "$DOCKER_IMAGE_SECTION")
+          
+          # Create release via Gitea API
+          # POST /repos/{owner}/{repo}/releases
+          # Write release notes to temp file for JSON encoding
+          RELEASE_NOTES_FILE=$(mktemp)
+          echo "$RELEASE_NOTES" > "$RELEASE_NOTES_FILE"
+          
+          export VERSION_TAG
+          # Use jq if available, otherwise Python
+          if command -v jq >/dev/null 2>&1; then
+            RELEASE_NOTES_JSON=$(jq -Rs . "$RELEASE_NOTES_FILE")
+            RELEASE_PAYLOAD=$(jq -n --arg tag "$VERSION_TAG" --argjson body "$RELEASE_NOTES_JSON" '{tag_name: $tag, name: $tag, body: $body, draft: false, prerelease: false}')
+          else
+            RELEASE_PAYLOAD=$(python3 -c "import json,os; f=open('$RELEASE_NOTES_FILE'); r=f.read(); f.close(); print(json.dumps({'tag_name':os.environ['VERSION_TAG'],'name':os.environ['VERSION_TAG'],'body':r,'draft':False,'prerelease':False}))")
+          fi
+          
+          RELEASE_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
+            -H "Authorization: token ${{ secrets.GTOKEN }}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "$RELEASE_PAYLOAD" \
+            "https://${{ env.REGISTRY }}/api/v1/repos/$REPO_OWNER/$REPO_NAME/releases")
+          
+          HTTP_STATUS=$(echo "$RELEASE_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
+          RELEASE_BODY=$(echo "$RELEASE_RESPONSE" | grep -v "HTTP_STATUS:")
+          
+          if [ "$HTTP_STATUS" = "201" ]; then
+            echo "✓ Release $VERSION_TAG created successfully"
+          elif [ "$HTTP_STATUS" = "409" ]; then
+            echo "ℹ Release $VERSION_TAG already exists (updating instead)..."
+            # Try to update the existing release
+            if command -v jq >/dev/null 2>&1; then
+              RELEASE_NOTES_JSON=$(jq -Rs . "$RELEASE_NOTES_FILE")
+              UPDATE_PAYLOAD=$(jq -n --arg tag "$VERSION_TAG" --argjson body "$RELEASE_NOTES_JSON" '{name: $tag, body: $body, draft: false, prerelease: false}')
+            else
+              UPDATE_PAYLOAD=$(python3 -c "import json,os; f=open('$RELEASE_NOTES_FILE'); r=f.read(); f.close(); print(json.dumps({'name':os.environ['VERSION_TAG'],'body':r,'draft':False,'prerelease':False}))")
+            fi
+            
+            UPDATE_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X PATCH \
+              -H "Authorization: token ${{ secrets.GTOKEN }}" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" \
+              -d "$UPDATE_PAYLOAD" \
+              "https://${{ env.REGISTRY }}/api/v1/repos/$REPO_OWNER/$REPO_NAME/releases/tags/$VERSION_TAG")
+            
+            UPDATE_STATUS=$(echo "$UPDATE_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
+            if [ "$UPDATE_STATUS" = "200" ]; then
+              echo "✓ Release $VERSION_TAG updated successfully"
+            else
+              echo "⚠ Failed to update release: $UPDATE_STATUS"
+            fi
+          else
+            echo "⚠ Failed to create release: $HTTP_STATUS"
+            if [ -n "$RELEASE_BODY" ]; then
+              echo "Response: $RELEASE_BODY"
+            fi
+          fi
+          
+          # Clean up temp file
+          rm -f "$RELEASE_NOTES_FILE"
+
+      - name: Summary
+        run: |
+          OWNER=$(echo "${{ env.IMAGE_NAME }}" | cut -d'/' -f1)
+          PACKAGE_NAME=$(echo "${{ env.IMAGE_NAME }}" | cut -d'/' -f2)
+          REPO_OWNER=$(echo "${{ gitea.repository }}" | cut -d'/' -f1)
+          
+          VERSION_TAG="${{ steps.tag.outputs.tag }}"
+          
+          echo "## Docker Image Built Successfully" >> $GITEA_STEP_SUMMARY
+          echo "" >> $GITEA_STEP_SUMMARY
+          echo "**Version:** \`$VERSION_TAG\`" >> $GITEA_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_TAG\`" >> $GITEA_STEP_SUMMARY
+          echo "" >> $GITEA_STEP_SUMMARY
+          echo "**Available Tags:**" >> $GITEA_STEP_SUMMARY
+          echo "- \`$VERSION_TAG\` (versioned)" >> $GITEA_STEP_SUMMARY
+          echo "- \`latest\` (always points to most recent build)" >> $GITEA_STEP_SUMMARY
+          echo "" >> $GITEA_STEP_SUMMARY
+          echo "**Pull with:**" >> $GITEA_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITEA_STEP_SUMMARY
+          echo "# Pull specific version" >> $GITEA_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_TAG" >> $GITEA_STEP_SUMMARY
+          echo "" >> $GITEA_STEP_SUMMARY
+          echo "# Or pull latest" >> $GITEA_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITEA_STEP_SUMMARY
+          echo "\`\`\`" >> $GITEA_STEP_SUMMARY
+          echo "" >> $GITEA_STEP_SUMMARY
+          echo "**Package Location:**" >> $GITEA_STEP_SUMMARY
+          echo "- Package: https://${{ env.REGISTRY }}/$REPO_OWNER/-/packages/container/$PACKAGE_NAME" >> $GITEA_STEP_SUMMARY
+          echo "- If the package doesn't appear in this repository's Packages section, you may need to link it manually:" >> $GITEA_STEP_SUMMARY
+          echo "  1. Visit the package page above" >> $GITEA_STEP_SUMMARY
+          echo "  2. Click 'Settings' (gear icon)" >> $GITEA_STEP_SUMMARY
+          echo "  3. Select repository \`${{ gitea.repository }}\` and save" >> $GITEA_STEP_SUMMARY
+          echo "" >> $GITEA_STEP_SUMMARY
+          if [ "$VERSION_TAG" != "latest" ]; then
+            echo "**Release:**" >> $GITEA_STEP_SUMMARY
+            echo "- Release: https://${{ env.REGISTRY }}/${{ gitea.repository }}/releases/tag/$VERSION_TAG" >> $GITEA_STEP_SUMMARY
+            echo "- All releases: https://${{ env.REGISTRY }}/${{ gitea.repository }}/releases" >> $GITEA_STEP_SUMMARY
+          fi
