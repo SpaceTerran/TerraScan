@@ -158,14 +158,19 @@ class OllamaClient(AIClient):
     def review(self, system_prompt: str, user_message: str) -> dict:
         import requests
         try:
+            payload = {
+                "model": self.config.model,
+                "prompt": f"{system_prompt}\n\n{user_message}",
+                "stream": False,
+                "format": "json"
+            }
+
+            if self.config.ollama_think is not None:
+                payload["think"] = self.config.ollama_think
+
             response = requests.post(
                 f"{self.base_url}/api/generate",
-                json={
-                    "model": self.config.model,
-                    "prompt": f"{system_prompt}\n\n{user_message}",
-                    "stream": False,
-                    "format": "json"
-                },
+                json=payload,
                 timeout=300
             )
             response.raise_for_status()
@@ -183,14 +188,19 @@ class OllamaClient(AIClient):
         import requests
 
         try:
+            payload = {
+                "model": self.config.model,
+                "prompt": f"You are a code analyst. Respond with valid JSON only, no markdown.\n\n{prompt}",
+                "stream": False,
+                "format": "json",
+            }
+
+            if self.config.ollama_think is not None:
+                payload["think"] = self.config.ollama_think
+
             response = requests.post(
                 f"{self.base_url}/api/generate",
-                json={
-                    "model": self.config.model,
-                    "prompt": f"You are a code analyst. Respond with valid JSON only, no markdown.\n\n{prompt}",
-                    "stream": False,
-                    "format": "json",
-                },
+                json=payload,
                 timeout=60,
             )
             response.raise_for_status()

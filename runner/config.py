@@ -14,6 +14,7 @@ class Config:
     provider: str = "openai"
     model: str = "gpt-5.2-codex"
     ollama_url: str = "http://localhost:11434"
+    ollama_think: bool | None = None
     max_tokens: int = 16000
     temperature: float = 0.2
 

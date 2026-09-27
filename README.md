@@ -12,7 +12,7 @@ Self-hosted AI code review bot for Gitea. Automatically reviews pull requests an
 - Automatic PR reviews triggered by Gitea Actions
 - Inline comments on specific lines plus summary comments (with optional code snippets)
 - **Impact analysis (optional):** Secondary AI pass analyzes how each change affects the codebase and feeds context into the main review
-- Supports OpenAI and Anthropic (Claude)
+- Supports OpenAI, Anthropic (Claude), and Ollama, with optional thinking control for Ollama
 - Configurable severity thresholds for blocking PRs
 - Stateless Docker container — all config via environment variables
 - Cleans up previous review comments on re-runs
@@ -107,8 +107,10 @@ Edit `config/review-config.yml` to customize behavior:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `provider` | `openai` | AI provider: `openai` or `anthropic` |
+| `provider` | `openai` | AI provider: `openai`, `anthropic`, or `ollama` |
 | `model` | `gpt-5.2-codex` | Model name for the selected provider |
+| `ollama_url` | `http://localhost:11434` | Ollama server URL reachable from the TerraScan container |
+| `ollama_think` | `null` | Optional Ollama thinking control: `true` enables thinking, `false` disables it, and `null` leaves the model's default behavior unchanged |
 | `fail_on_severity` | `critical` | Minimum severity to fail CI: `critical`, `error`, `warning`, `none` |
 | `max_comments` | `50` | Maximum inline comments per PR |
 | `max_tokens` | `16000` | Maximum AI response length |
@@ -117,6 +119,17 @@ Edit `config/review-config.yml` to customize behavior:
 | `impact_token_budget` | `6000` | Token budget for impact-related context (higher = more context, more cost) |
 | `impact_max_files` | `10` | Max number of changed files to analyze for impact in large PRs |
 | `impact_include_references` | `true` | Include grep-based reference search (files that import/reference changed files) |
+
+### Ollama Thinking Control
+
+For Ollama models that support thinking, set `ollama_think` in `config/review-config.yml` or a custom configuration mounted at `/app/config/custom.yml`:
+
+```yaml
+provider: ollama
+ollama_think: false
+```
+
+Set `model` to your Ollama model name and `ollama_url` to your server's address. The thinking setting applies to both the main code review and the secondary impact analysis queries. Use `true` to enable thinking, or omit `ollama_think` (or set it to `null`) to leave the `think` parameter out of requests and preserve the model's default behavior. This setting only affects the Ollama provider.
 
 ## Architecture
 
