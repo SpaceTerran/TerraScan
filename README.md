@@ -1,5 +1,8 @@
 # TerraScan
 
+> [!WARNING]
+> **TerraScan is no longer maintained.** This repository is archived and read-only, so it takes no new issues, pull requests or releases. The code and the published images stay available, and you are welcome to fork it.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build Status](https://github.com/SpaceTerran/TerraScan/actions/workflows/build-image.yml/badge.svg?branch=main)](https://github.com/SpaceTerran/TerraScan/actions/workflows/build-image.yml)
 
